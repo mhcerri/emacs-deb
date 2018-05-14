@@ -1,18 +1,32 @@
-From e1a8f19c5ec119202a2df934bf3175e2a4fdd4a8 Mon Sep 17 00:00:00 2001
+From 49fc040077b33bd1e78ee425575e76329b772a41 Mon Sep 17 00:00:00 2001
 From: Aaron Jensen <aaronjensen@gmail.com>
-Date: Sun, 4 Feb 2018 22:52:48 -0800
-Subject: [PATCH] Show initial buffer immediately upon frame creation from
- server
+Date: Fri, 16 Feb 2018 17:43:04 +0200
+Subject: [PATCH] Don't flash previous buffer when connecting with emacsclient
 
+* lisp/server.el (server-execute): Accept lambda for creating
+frame rather than frame.  Ensure newly created tty frame
+initially shows the correct buffer.
+(server-process-filter): Pass a lambda to server-execute to create
+a frame.  (Bug#24218)
 ---
- lisp/server.el | 85 ++++++++++++++++++++++++++++++++--------------------------
- 1 file changed, 47 insertions(+), 38 deletions(-)
+ lisp/server.el | 88 ++++++++++++++++++++++++++++----------------------
+ 1 file changed, 49 insertions(+), 39 deletions(-)
 
 diff --git a/lisp/server.el b/lisp/server.el
-index ac0d701851..f7766a0253 100644
+index d3933883cf74..a892203c24a7 100644
 --- a/lisp/server.el
 +++ b/lisp/server.el
-@@ -1229,28 +1229,29 @@ server-execute-continuation
+@@ -1092,7 +1092,8 @@ server-execute-continuation
+ 		tty-type   ; string.
+ 		files
+ 		filepos
+-		args-left)
++		args-left
++                create-frame-func)
+ 	    ;; Remove this line from STRING.
+ 	    (setq string (substring string (match-end 0)))
+ 	    (setq args-left
+@@ -1244,28 +1245,29 @@ server-execute-continuation
  		 (or files commands)
  		 (setq use-current-frame t))
  
@@ -38,7 +52,7 @@ index ac0d701851..f7766a0253 100644
 -		   ;; When resuming on a tty, tty-name is nil.
 -		   (tty-name
 -		    (server-create-tty-frame tty-name tty-type proc))))
-+	    (setq create-frame
++	    (setq create-frame-func
 +                  (lambda ()
 +		    (cond
 +		     ((and use-current-frame
@@ -64,25 +78,25 @@ index ac0d701851..f7766a0253 100644
  
              (process-put
               proc 'continuation
-@@ -1262,7 +1263,7 @@ server-execute-continuation
+@@ -1277,7 +1279,7 @@ server-execute-continuation
                           (if (and dir (file-directory-p dir))
                               dir default-directory)))
                     (server-execute proc files nowait commands
 -                                   dontkill frame tty-name)))))
-+                                   dontkill create-frame tty-name)))))
++                                   dontkill create-frame-func tty-name)))))
  
              (when (or frame files)
                (server-goto-toplevel proc))
-@@ -1271,7 +1272,7 @@ server-execute-continuation
+@@ -1286,7 +1288,7 @@ server-execute-continuation
      ;; condition-case
      (error (server-return-error proc err))))
  
 -(defun server-execute (proc files nowait commands dontkill frame tty-name)
-+(defun server-execute (proc files nowait commands dontkill create-frame tty-name)
++(defun server-execute (proc files nowait commands dontkill create-frame-func tty-name)
    ;; This is run from timers and process-filters, i.e. "asynchronously".
    ;; But w.r.t the user, this is not really asynchronous since the timer
    ;; is run after 0s and the process-filter is run in response to the
-@@ -1281,21 +1282,29 @@ server-execute
+@@ -1296,21 +1298,29 @@ server-execute
    ;; including code that needs to wait.
    (with-local-quit
      (condition-case err
@@ -105,7 +119,7 @@ index ac0d701851..f7766a0253 100644
 +                                               initial-buffer
 +                                               (current-buffer))
 +                        (prog1
-+                            (funcall create-frame)
++                            (funcall create-frame-func)
 +                          ;; Switch to initial buffer in case the frame was reused.
 +                          (when initial-buffer
 +                            (switch-to-buffer initial-buffer 'norecord))))))
@@ -127,5 +141,5 @@ index ac0d701851..f7766a0253 100644
            ;; Delete the client if necessary.
            (cond
 -- 
-2.15.1
+2.17.0
 
