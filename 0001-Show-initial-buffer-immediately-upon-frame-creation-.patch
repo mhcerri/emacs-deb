@@ -1,0 +1,131 @@
+From e1a8f19c5ec119202a2df934bf3175e2a4fdd4a8 Mon Sep 17 00:00:00 2001
+From: Aaron Jensen <aaronjensen@gmail.com>
+Date: Sun, 4 Feb 2018 22:52:48 -0800
+Subject: [PATCH] Show initial buffer immediately upon frame creation from
+ server
+
+---
+ lisp/server.el | 85 ++++++++++++++++++++++++++++++++--------------------------
+ 1 file changed, 47 insertions(+), 38 deletions(-)
+
+diff --git a/lisp/server.el b/lisp/server.el
+index ac0d701851..f7766a0253 100644
+--- a/lisp/server.el
++++ b/lisp/server.el
+@@ -1229,28 +1229,29 @@ server-execute-continuation
+ 		 (or files commands)
+ 		 (setq use-current-frame t))
+ 
+-	    (setq frame
+-		  (cond
+-		   ((and use-current-frame
+-			 (or (eq use-current-frame 'always)
+-			     ;; We can't use the Emacs daemon's
+-			     ;; terminal frame.
+-			     (not (and (daemonp)
+-				       (null (cdr (frame-list)))
+-				       (eq (selected-frame)
+-					   terminal-frame)))))
+-		    (setq tty-name nil tty-type nil)
+-		    (if display (server-select-display display)))
+-		   ((or (and (eq system-type 'windows-nt)
+-			     (daemonp)
+-			     (setq display "w32"))
+-		        (eq tty-name 'window-system))
+-		    (server-create-window-system-frame display nowait proc
+-						       parent-id
+-						       frame-parameters))
+-		   ;; When resuming on a tty, tty-name is nil.
+-		   (tty-name
+-		    (server-create-tty-frame tty-name tty-type proc))))
++	    (setq create-frame
++                  (lambda ()
++		    (cond
++		     ((and use-current-frame
++			   (or (eq use-current-frame 'always)
++			       ;; We can't use the Emacs daemon's
++			       ;; terminal frame.
++			       (not (and (daemonp)
++				         (null (cdr (frame-list)))
++				         (eq (selected-frame)
++					     terminal-frame)))))
++		      (setq tty-name nil tty-type nil)
++		      (if display (server-select-display display)))
++		     ((or (and (eq system-type 'windows-nt)
++			       (daemonp)
++			       (setq display "w32"))
++		          (eq tty-name 'window-system))
++		      (server-create-window-system-frame display nowait proc
++						    parent-id
++						    frame-parameters))
++		     ;; When resuming on a tty, tty-name is nil.
++		     (tty-name
++		      (server-create-tty-frame tty-name tty-type proc)))))
+ 
+             (process-put
+              proc 'continuation
+@@ -1262,7 +1263,7 @@ server-execute-continuation
+                          (if (and dir (file-directory-p dir))
+                              dir default-directory)))
+                    (server-execute proc files nowait commands
+-                                   dontkill frame tty-name)))))
++                                   dontkill create-frame tty-name)))))
+ 
+             (when (or frame files)
+               (server-goto-toplevel proc))
+@@ -1271,7 +1272,7 @@ server-execute-continuation
+     ;; condition-case
+     (error (server-return-error proc err))))
+ 
+-(defun server-execute (proc files nowait commands dontkill frame tty-name)
++(defun server-execute (proc files nowait commands dontkill create-frame tty-name)
+   ;; This is run from timers and process-filters, i.e. "asynchronously".
+   ;; But w.r.t the user, this is not really asynchronous since the timer
+   ;; is run after 0s and the process-filter is run in response to the
+@@ -1281,21 +1282,29 @@ server-execute
+   ;; including code that needs to wait.
+   (with-local-quit
+     (condition-case err
+-        (let ((buffers (server-visit-files files proc nowait)))
+-          (mapc 'funcall (nreverse commands))
++        (let* ((buffers (server-visit-files files proc nowait))
++               ;; If we were told only to open a new client, obey
++               ;; `initial-buffer-choice' if it specifies a file
++               ;; or a function.
++               (initial-buffer (unless (or files commands)
++                                 (let ((buf
++                                        (cond ((stringp initial-buffer-choice)
++                                               (find-file-noselect initial-buffer-choice))
++                                              ((functionp initial-buffer-choice)
++                                               (funcall initial-buffer-choice)))))
++                                   (if (buffer-live-p buf) buf (get-buffer-create "*scratch*")))))
++               ;; Set current buffer so that newly created tty frames
++               ;; show the correct buffer initially.
++               (frame (with-current-buffer (or (car buffers)
++                                               initial-buffer
++                                               (current-buffer))
++                        (prog1
++                            (funcall create-frame)
++                          ;; Switch to initial buffer in case the frame was reused.
++                          (when initial-buffer
++                            (switch-to-buffer initial-buffer 'norecord))))))
+ 
+-	  ;; If we were told only to open a new client, obey
+-	  ;; `initial-buffer-choice' if it specifies a file
+-          ;; or a function.
+-          (unless (or files commands)
+-            (let ((buf
+-                   (cond ((stringp initial-buffer-choice)
+-			  (find-file-noselect initial-buffer-choice))
+-			 ((functionp initial-buffer-choice)
+-			  (funcall initial-buffer-choice)))))
+-	      (switch-to-buffer
+-	       (if (buffer-live-p buf) buf (get-buffer-create "*scratch*"))
+-	       'norecord)))
++          (mapc 'funcall (nreverse commands))
+ 
+           ;; Delete the client if necessary.
+           (cond
+-- 
+2.15.1
+
